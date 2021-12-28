@@ -1,14 +1,12 @@
 package com.geekbrains.cloud.client;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
+import java.io.*;
 import java.net.Socket;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.ResourceBundle;
 
 import javafx.application.Platform;
@@ -19,9 +17,11 @@ import javafx.scene.control.TextField;
 
 public class ClientController implements Initializable {
 
-    public ListView<String> listView;
+    public ListView<String> clientListView;
+    public ListView<String> serverListView;
 
     public TextField textField;
+    public TextField serverTextField;
 
     private DataInputStream is;
     private DataOutputStream os;
@@ -30,7 +30,7 @@ public class ClientController implements Initializable {
 
     private byte[] buf;
 
-    public void sendMessage(ActionEvent actionEvent) throws IOException {
+    public void sendFile(ActionEvent actionEvent) throws IOException {
         String fileName = textField.getText();
         File currentFile = currentDir.toPath().resolve(fileName).toFile();
         os.writeUTF("#SEND#FILE#");
@@ -39,12 +39,13 @@ public class ClientController implements Initializable {
         try (FileInputStream is = new FileInputStream(currentFile)) {
             while (true) {
                 int read = is.read(buf);
-                if (read == - 1) {
+                if (read == -1) {
                     break;
                 }
                 os.write(buf, 0, read);
             }
         }
+        refreshServerList();
         os.flush();
         textField.clear();
     }
@@ -53,7 +54,36 @@ public class ClientController implements Initializable {
         try {
             while (true) {
                 String message = is.readUTF();
-                Platform.runLater(() -> textField.setText(message));
+
+                if (message.startsWith("#")) {
+                    if (message.startsWith("#START#LIST")) {
+                        List<String> files = new ArrayList<>();
+                        String fileName;
+                        while (!(fileName = is.readUTF()).equals("#END#LIST#")) {
+                            files.add(fileName);
+                        }
+                        Platform.runLater(() -> serverListView.getItems().addAll(files));
+                    } else if (message.startsWith("#GET#FILE#")) {
+                        String fileName = is.readUTF();
+                        long size = is.readLong();
+                        int bufSize = is.readInt();
+                        System.out.println("Created file: " + fileName);
+                        System.out.println("File size: " + size);
+                        System.out.println("Buffer size: " + bufSize);
+                        Path currentPath = currentDir.toPath().resolve(fileName);
+                        try (FileOutputStream fos = new FileOutputStream(currentPath.toFile())) {
+                            for (int i = 0; i < (size + bufSize - 1) / bufSize; i++) {
+                                int read = is.read(buf);
+                                fos.write(buf, 0, read);
+                            }
+                        }
+                        os.writeUTF("File successfully uploaded");
+                        os.flush();
+                        Platform.runLater(this::fillCurrentDirFiles);
+                    }
+                } else {
+                    Platform.runLater(() -> textField.setText(message));
+                }
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -62,15 +92,15 @@ public class ClientController implements Initializable {
     }
 
     private void fillCurrentDirFiles() {
-        listView.getItems().clear();
-        listView.getItems().add("..");
-        listView.getItems().addAll(currentDir.list());
+        clientListView.getItems().clear();
+        clientListView.getItems().add("..");
+        clientListView.getItems().addAll(currentDir.list());
     }
 
     private void initClickListener() {
-        listView.setOnMouseClicked(e -> {
+        clientListView.setOnMouseClicked(e -> {
             if (e.getClickCount() == 2) {
-                String fileName = listView.getSelectionModel().getSelectedItem();
+                String fileName = clientListView.getSelectionModel().getSelectedItem();
                 System.out.println("Выбран файл: " + fileName);
                 Path path = currentDir.toPath().resolve(fileName);
                 if (Files.isDirectory(path)) {
@@ -80,6 +110,13 @@ public class ClientController implements Initializable {
                 } else {
                     textField.setText(fileName);
                 }
+            }
+        });
+
+        serverListView.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2) {
+                String fileName = serverListView.getSelectionModel().getSelectedItem();
+                serverTextField.setText(fileName);
             }
         });
     }
@@ -97,8 +134,30 @@ public class ClientController implements Initializable {
             Thread readThread = new Thread(this::read);
             readThread.setDaemon(true);
             readThread.start();
+            refreshServerList();
         } catch (Exception e) {
             e.printStackTrace();
+        }
+    }
+
+    public void refreshServerList() {
+        serverListView.getItems().clear();
+        try {
+            os.writeUTF("#GET#USER#FILES#");
+            os.flush();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void getFile(ActionEvent actionEvent) {
+        try {
+            String fileName = serverListView.getSelectionModel().getSelectedItem();
+            os.writeUTF("#GET#FILE#");
+            os.writeUTF(fileName);
+            os.flush();
+        } catch (Exception ex) {
+            ex.printStackTrace();
         }
     }
 }

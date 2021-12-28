@@ -1,10 +1,8 @@
 package com.geekbrains.cloud.server;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
+import javafx.event.ActionEvent;
+
+import java.io.*;
 import java.net.Socket;
 import java.nio.file.Path;
 
@@ -23,6 +21,23 @@ public class FileProcessorHandler implements Runnable {
         currentDir = new File("serverDir");
     }
 
+    public void sendFile(String fileName) throws IOException {
+        File currentFile = currentDir.toPath().resolve(fileName).toFile();
+        os.writeUTF("#SEND#FILE#");
+        os.writeUTF(fileName);
+        os.writeLong(currentFile.length());
+        try (FileInputStream is = new FileInputStream(currentFile)) {
+            while (true) {
+                int read = is.read(buf);
+                if (read == -1) {
+                    break;
+                }
+                os.write(buf, 0, read);
+            }
+        }
+        os.flush();
+    }
+
     @Override
     public void run() {
         try {
@@ -39,6 +54,35 @@ public class FileProcessorHandler implements Runnable {
                         for (int i = 0; i < (size + SIZE - 1) / SIZE; i++) {
                             int read = is.read(buf);
                             fos.write(buf, 0, read);
+                        }
+                    }
+                    os.writeUTF("File successfully downloaded");
+                    os.flush();
+                } else if (command.equals("#GET#USER#FILES#")) {
+                    String[] currentDirFiles = currentDir.toPath().toFile().list();
+                    if (currentDirFiles != null) {
+                        int filesCount = currentDirFiles.length;
+                        os.writeUTF("#START#LIST#OF#" + filesCount);
+                        for (String item : currentDirFiles) {
+                            os.writeUTF(item);
+                        }
+                        os.writeUTF("#END#LIST#");
+                    }
+                }else if (command.equals("#GET#FILE#")) {
+                    String fileName = is.readUTF();
+                    System.out.println("Requested file: " + fileName);
+                    File currentFile = currentDir.toPath().resolve(fileName).toFile();
+                    os.writeUTF("#GET#FILE#");
+                    os.writeUTF(fileName);
+                    os.writeLong(currentFile.length());
+                    os.writeInt(SIZE);
+                    try (FileInputStream fos = new FileInputStream(currentFile)) {
+                        while (true) {
+                            int read = fos.read(buf);
+                            if (read == -1) {
+                                break;
+                            }
+                            os.write(buf, 0, read);
                         }
                     }
                     os.writeUTF("File successfully uploaded");
