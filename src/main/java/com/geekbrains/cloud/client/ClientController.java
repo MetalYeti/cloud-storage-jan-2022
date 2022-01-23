@@ -9,12 +9,21 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.ResourceBundle;
 
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.*;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.string.StringDecoder;
+import io.netty.handler.codec.string.StringEncoder;
 import javafx.application.Platform;
 import javafx.event.ActionEvent;
 import javafx.fxml.Initializable;
 import javafx.scene.control.ListView;
 import javafx.scene.control.TextField;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 public class ClientController implements Initializable {
 
     public ListView<String> clientListView;
@@ -23,72 +32,23 @@ public class ClientController implements Initializable {
     public TextField textField;
     public TextField serverTextField;
 
-    private DataInputStream is;
-    private DataOutputStream os;
-
     private File currentDir;
-
-    private byte[] buf;
+    private NetworkHandler net;
 
     public void sendFile(ActionEvent actionEvent) throws IOException {
         String fileName = textField.getText();
         File currentFile = currentDir.toPath().resolve(fileName).toFile();
-        os.writeUTF("#SEND#FILE#");
-        os.writeUTF(fileName);
-        os.writeLong(currentFile.length());
+
         try (FileInputStream is = new FileInputStream(currentFile)) {
-            while (true) {
-                int read = is.read(buf);
-                if (read == -1) {
-                    break;
-                }
-                os.write(buf, 0, read);
+            byte[] bytes = new byte[(int) currentFile.length()];
+            int read = is.read(bytes);
+            if (read > 0) {
+                FileWrapping fw = new FileWrapping(fileName, bytes);
+                net.sendFile(fw);
             }
         }
         refreshServerList();
-        os.flush();
         textField.clear();
-    }
-
-    private void read() {
-        try {
-            while (true) {
-                String message = is.readUTF();
-
-                if (message.startsWith("#")) {
-                    if (message.startsWith("#START#LIST")) {
-                        List<String> files = new ArrayList<>();
-                        String fileName;
-                        while (!(fileName = is.readUTF()).equals("#END#LIST#")) {
-                            files.add(fileName);
-                        }
-                        Platform.runLater(() -> serverListView.getItems().addAll(files));
-                    } else if (message.startsWith("#GET#FILE#")) {
-                        String fileName = is.readUTF();
-                        long size = is.readLong();
-                        int bufSize = is.readInt();
-                        System.out.println("Created file: " + fileName);
-                        System.out.println("File size: " + size);
-                        System.out.println("Buffer size: " + bufSize);
-                        Path currentPath = currentDir.toPath().resolve(fileName);
-                        try (FileOutputStream fos = new FileOutputStream(currentPath.toFile())) {
-                            for (int i = 0; i < (size + bufSize - 1) / bufSize; i++) {
-                                int read = is.read(buf);
-                                fos.write(buf, 0, read);
-                            }
-                        }
-                        os.writeUTF("File successfully uploaded");
-                        os.flush();
-                        Platform.runLater(this::fillCurrentDirFiles);
-                    }
-                } else {
-                    Platform.runLater(() -> textField.setText(message));
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-            // reconnect to server
-        }
     }
 
     private void fillCurrentDirFiles() {
@@ -123,39 +83,39 @@ public class ClientController implements Initializable {
 
     @Override
     public void initialize(URL location, ResourceBundle resources) {
-        try {
-            buf = new byte[256];
-            currentDir = new File(System.getProperty("user.home"));
-            fillCurrentDirFiles();
-            initClickListener();
-            Socket socket = new Socket("localhost", 8189);
-            is = new DataInputStream(socket.getInputStream());
-            os = new DataOutputStream(socket.getOutputStream());
-            Thread readThread = new Thread(this::read);
-            readThread.setDaemon(true);
-            readThread.start();
-            refreshServerList();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        currentDir = new File(System.getProperty("user.home"));
+        net = new NetworkHandler(args -> {
+            Object msg = args[1];
+            if (msg instanceof FileWrapping) {
+                FileWrapping fw = (FileWrapping) msg;
+                try (FileOutputStream fos = new FileOutputStream(currentDir.toPath().resolve(fw.getName()).toFile())) {
+                    fos.write(fw.getBytes());
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+                Platform.runLater(this::fillCurrentDirFiles);
+                log.info("FileWrapping {}", msg);
+            } else if (msg instanceof List) {
+                log.info("FilesList {}", msg);
+                Platform.runLater(() -> serverListView.getItems().addAll((List) msg));
+            }
+        });
+        fillCurrentDirFiles();
+        initClickListener();
+        refreshServerList();
     }
 
     public void refreshServerList() {
         serverListView.getItems().clear();
-        try {
-            os.writeUTF("#GET#USER#FILES#");
-            os.flush();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        net.sendMessage("#GET#USER#FILES#");
     }
 
     public void getFile(ActionEvent actionEvent) {
         try {
+            log.info("Requesting file...");
             String fileName = serverListView.getSelectionModel().getSelectedItem();
-            os.writeUTF("#GET#FILE#");
-            os.writeUTF(fileName);
-            os.flush();
+            net.sendMessage("#GET#FILE#" + fileName);
+            fillCurrentDirFiles();
         } catch (Exception ex) {
             ex.printStackTrace();
         }
