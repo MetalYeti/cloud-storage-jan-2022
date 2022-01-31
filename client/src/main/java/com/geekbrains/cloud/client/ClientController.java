@@ -1,24 +1,17 @@
 package com.geekbrains.cloud.client;
 
 import java.io.*;
-import java.net.Socket;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.ResourceBundle;
 
-import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.*;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.codec.string.StringDecoder;
-import io.netty.handler.codec.string.StringEncoder;
+import com.geekbrains.cloud.message.*;
 import javafx.application.Platform;
 import javafx.event.ActionEvent;
+import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
+import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
 import javafx.scene.control.TextField;
 import lombok.extern.slf4j.Slf4j;
@@ -26,17 +19,21 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class ClientController implements Initializable {
 
+    @FXML
     public ListView<String> clientListView;
+    @FXML
     public ListView<String> serverListView;
-
-    public TextField textField;
-    public TextField serverTextField;
+    @FXML
+    public Label serverInfo;
+    @FXML
+    public Label clientInfo;
 
     private File currentDir;
     private NetworkHandler net;
 
+    @FXML
     public void sendFile(ActionEvent actionEvent) throws IOException {
-        String fileName = textField.getText();
+        String fileName = clientListView.getSelectionModel().getSelectedItem();
         File currentFile = currentDir.toPath().resolve(fileName).toFile();
 
         try (FileInputStream is = new FileInputStream(currentFile)) {
@@ -44,11 +41,9 @@ public class ClientController implements Initializable {
             int read = is.read(bytes);
             if (read > 0) {
                 FileWrapping fw = new FileWrapping(fileName, bytes);
-                net.sendFile(fw);
+                net.sendMessage(fw);
             }
         }
-        refreshServerList();
-        textField.clear();
     }
 
     private void fillCurrentDirFiles() {
@@ -66,17 +61,22 @@ public class ClientController implements Initializable {
                 if (Files.isDirectory(path)) {
                     currentDir = path.toFile();
                     fillCurrentDirFiles();
-                    textField.clear();
+                    clientInfo.setText("Имя папки:" + fileName);
                 } else {
-                    textField.setText(fileName);
+                    clientInfo.setText("Имя файла:" + fileName + ", размер: " + path.toFile().length() + " байт");
                 }
             }
         });
 
         serverListView.setOnMouseClicked(e -> {
             if (e.getClickCount() == 2) {
-                String fileName = serverListView.getSelectionModel().getSelectedItem();
-                serverTextField.setText(fileName);
+                try {
+                    log.info("Requesting file info...");
+                    String fileName = serverListView.getSelectionModel().getSelectedItem();
+                    net.sendMessage(new FileInfo(fileName));
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                }
             }
         });
     }
@@ -84,38 +84,41 @@ public class ClientController implements Initializable {
     @Override
     public void initialize(URL location, ResourceBundle resources) {
         currentDir = new File(System.getProperty("user.home"));
-        net = new NetworkHandler(args -> {
-            Object msg = args[1];
-            if (msg instanceof FileWrapping) {
-                FileWrapping fw = (FileWrapping) msg;
-                try (FileOutputStream fos = new FileOutputStream(currentDir.toPath().resolve(fw.getName()).toFile())) {
-                    fos.write(fw.getBytes());
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-                Platform.runLater(this::fillCurrentDirFiles);
-                log.info("FileWrapping {}", msg);
-            } else if (msg instanceof List) {
-                log.info("FilesList {}", msg);
-                Platform.runLater(() -> serverListView.getItems().addAll((List) msg));
+        net = NetworkHandler.getInstanceAndSetHandlerCallback(args -> {
+            AbstractMessage msg = (AbstractMessage) args[1];
+            switch (msg.getType()) {
+                case FILE_MESSAGE:
+                    FileWrapping fw = (FileWrapping) msg;
+                    try (FileOutputStream fos = new FileOutputStream(currentDir.toPath().resolve(fw.getName()).toFile())) {
+                        fos.write(fw.getBytes());
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                    Platform.runLater(this::fillCurrentDirFiles);
+                    log.info("FileWrapping {}", msg);
+                    break;
+                case FILE_LIST:
+                    log.info("FilesList {}", msg);
+                    serverListView.getItems().clear();
+                    Platform.runLater(() -> serverListView.getItems().addAll(((FileList) msg).getList()));
+                    break;
+                case FILE_INFO:
+                    FileInfo fi = (FileInfo) msg;
+                    log.info("FileInfo {}", msg);
+                    Platform.runLater(() -> serverInfo.setText("Имя файла:" + fi.getFilename() + ", размер: " + fi.getSize() + " байт"));
+                    break;
             }
         });
         fillCurrentDirFiles();
         initClickListener();
-        refreshServerList();
     }
 
-    public void refreshServerList() {
-        serverListView.getItems().clear();
-        net.sendMessage("#GET#USER#FILES#");
-    }
-
+    @FXML
     public void getFile(ActionEvent actionEvent) {
         try {
             log.info("Requesting file...");
             String fileName = serverListView.getSelectionModel().getSelectedItem();
-            net.sendMessage("#GET#FILE#" + fileName);
-            fillCurrentDirFiles();
+            net.sendMessage(new FileRequestMessage(fileName));
         } catch (Exception ex) {
             ex.printStackTrace();
         }
