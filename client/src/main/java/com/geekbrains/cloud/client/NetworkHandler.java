@@ -1,5 +1,6 @@
 package com.geekbrains.cloud.client;
 
+import com.geekbrains.cloud.message.AbstractMessage;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -10,11 +11,43 @@ import io.netty.handler.codec.serialization.ObjectDecoder;
 import io.netty.handler.codec.serialization.ObjectEncoder;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.concurrent.CountDownLatch;
+
 @Slf4j
 public class NetworkHandler {
-    SocketChannel socketChannel;
 
-    public NetworkHandler(Callback cb) {
+    private static CountDownLatch ready;
+    private SocketChannel socketChannel;
+    private static NetworkHandler instance;
+
+    public static NetworkHandler getInstance() {
+        if (instance == null) {
+            instance = new NetworkHandler();
+        }
+        return instance;
+    }
+
+    public static NetworkHandler getInstanceAndSetHandlerCallback(Callback cb) {
+        if (instance == null) {
+            instance = new NetworkHandler();
+        }
+        try {
+            ready.await();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        instance.setInboundHandlerCallback(cb);
+        return instance;
+    }
+
+    public void setInboundHandlerCallback(Callback cb) {
+        if (socketChannel != null && cb != null) {
+            socketChannel.pipeline().get(ClientInboundHandler.class).setCallback(cb);
+        }
+    }
+
+    private NetworkHandler() {
+        ready = new CountDownLatch(1);
         Thread t = new Thread(() -> {
 
             EventLoopGroup workerGroup = new NioEventLoopGroup();
@@ -28,17 +61,11 @@ public class NetworkHandler {
                         socketChannel = ch;
                         ch.pipeline().addLast(new ObjectEncoder(),
                                 new ObjectDecoder(Integer.MAX_VALUE, ClassResolvers.cacheDisabled(null)),
-                                new ChannelInboundHandlerAdapter() {
-                                    @Override
-                                    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-                                        if (cb != null) {
-                                            cb.action(ctx, msg);
-                                        }
-                                    }
-                                });
+                                new ClientInboundHandler()
+                        );
+                        ready.countDown();
                     }
                 });
-
                 ChannelFuture f = b.connect("localhost", 8189).sync();
                 f.channel().closeFuture().sync();
             } catch (Exception e) {
@@ -52,15 +79,11 @@ public class NetworkHandler {
         t.start();
     }
 
-    public void sendMessage(String message) {
+    public void sendMessage(AbstractMessage message) {
         if (socketChannel != null) {
             log.info("Sending message {}", message);
             socketChannel.writeAndFlush(message);
         }
-    }
-
-    public void sendFile(FileWrapping file) {
-        socketChannel.writeAndFlush(file);
     }
 }
 

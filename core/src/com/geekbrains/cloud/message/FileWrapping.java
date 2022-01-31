@@ -1,8 +1,8 @@
-package com.geekbrains.cloud.client;
+package com.geekbrains.cloud.message;
 
 import java.io.Serializable;
 
-public class FileWrapping implements Serializable {
+public class FileWrapping extends AbstractMessage implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private String name;
@@ -13,6 +13,7 @@ public class FileWrapping implements Serializable {
         this.name = name;
         this.bytes = bytes;
         length = bytes.length;
+        this.type = MessageType.FILE_MESSAGE;
     }
 
     public String getName() {
