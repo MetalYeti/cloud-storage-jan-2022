@@ -6,5 +6,9 @@ public enum MessageType {
     FILE_REQUEST,
     AUTH_REQUEST,
     AUTH_RESPONSE,
-    FILE_INFO
+    FILE_INFO,
+    READY,
+    NEW_FOLDER,
+    DELETE,
+    RENAME
 }
