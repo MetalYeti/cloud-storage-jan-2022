@@ -6,14 +6,15 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.*;
-import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Slf4j
 public class FileProcessorHandler extends ChannelInboundHandlerAdapter {
 
     private File currentDir;
+    private File rootDir;
 
     private AuthService auth = new SimpleAuthService();
 
@@ -21,13 +22,16 @@ public class FileProcessorHandler extends ChannelInboundHandlerAdapter {
         currentDir = new File("serverDir");
     }
 
-    public FileProcessorHandler(File currentDir) {
+    public FileProcessorHandler(File currentDir) throws IOException {
         this.currentDir = currentDir;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         switch (((AbstractMessage) msg).getType()) {
+            case READY:
+                sendFilesList(ctx);
+                break;
             case FILE_MESSAGE:
                 FileWrapping fw = (FileWrapping) msg;
                 try (FileOutputStream fos = new FileOutputStream(currentDir.toPath().resolve(fw.getName()).toFile())) {
@@ -41,7 +45,7 @@ public class FileProcessorHandler extends ChannelInboundHandlerAdapter {
                 log.info("List of files requested {}", msg);
                 break;
             case FILE_REQUEST:
-                String filename = ((FileRequestMessage) msg).getFileName();
+                String filename = ((FileOperation) msg).getFilename();
                 File file = currentDir.toPath().resolve(filename).toFile();
                 try (FileInputStream in = new FileInputStream(file)) {
                     byte[] bytes = new byte[(int) file.length()];
@@ -59,11 +63,11 @@ public class FileProcessorHandler extends ChannelInboundHandlerAdapter {
                 if (auth.userExists(user)) {
                     if (auth.authorize(user, pass)) {
                         currentDir = currentDir.toPath().resolve(user).toFile();
-                        if (!currentDir.exists()){
+                        rootDir = currentDir;
+                        if (!currentDir.exists()) {
                             currentDir.mkdir();
                         }
                         ctx.writeAndFlush(new AuthResponse("Welcome " + user, true));
-                        sendFilesList(ctx);
                     } else {
                         ctx.writeAndFlush(new AuthResponse("Wrong password", false));
                     }
@@ -72,11 +76,60 @@ public class FileProcessorHandler extends ChannelInboundHandlerAdapter {
                 }
                 log.info("Auth attempt from {}", user);
                 break;
+            case AUTH_RESPONSE:
+                break;
             case FILE_INFO:
-                FileInfo fi = (FileInfo) msg;
-                File target = currentDir.toPath().resolve(fi.getFilename()).toFile();
-                ctx.writeAndFlush(new FileInfo(fi.getFilename(), target.length()));
-                log.info("File info requested {}", msg);
+                FileOperation fi = (FileOperation) msg;
+
+                File target;
+                if (fi.getFilename().equals("..")) {
+                    if (currentDir.equals(rootDir)) {
+                        target = rootDir;
+                    } else {
+                        target = currentDir.toPath().getParent().toFile();
+                    }
+                } else {
+                    target = currentDir.toPath().resolve(fi.getFilename()).toFile();
+                }
+                if (target.isDirectory()) {
+                    currentDir = target;
+                    sendFilesList(ctx);
+                    log.info("Navigating to {}", currentDir);
+                } else {
+                    ctx.writeAndFlush(new FileOperation(fi.getFilename(), target.length()));
+                    log.info("File info requested {}", msg);
+                }
+                break;
+            case NEW_FOLDER:
+                FileOperation newFolder = (FileOperation) msg;
+                File folder = currentDir.toPath().resolve(newFolder.getFilename()).toFile();
+                boolean created = false;
+                if (!folder.exists()) {
+                    created = folder.mkdir();
+                    log.info("Creating folder {}", newFolder.getFilename());
+                }
+
+                if (created) {
+                    sendFilesList(ctx);
+                }
+                break;
+            case DELETE:
+                FileOperation del = (FileOperation) msg;
+                boolean deleted = currentDir.toPath().resolve(del.getFilename()).toFile().delete();
+                log.info("Deleting {}", del.getFilename());
+                if (deleted) {
+                    sendFilesList(ctx);
+                }
+                break;
+            case RENAME:
+                FileOperation rename = (FileOperation) msg;
+                File oldName = currentDir.toPath().resolve(rename.getFilename()).toFile();
+                File newName = currentDir.toPath().resolve(rename.getNewFilename()).toFile();
+                boolean renamed = oldName.renameTo(newName);
+                log.info("Renaming {} -> {}", rename.getFilename(), rename.getNewFilename());
+                if (renamed) {
+                    sendFilesList(ctx);
+                }
                 break;
         }
     }
@@ -90,7 +143,8 @@ public class FileProcessorHandler extends ChannelInboundHandlerAdapter {
     private void sendFilesList(ChannelHandlerContext ctx) {
         String[] currentDirFiles = currentDir.toPath().toFile().list();
         if (currentDirFiles != null) {
-            List<String> files = new ArrayList<>(Arrays.asList(currentDirFiles));
+            List<String> files = Arrays.stream(currentDirFiles).map(e -> Paths.get(e).toFile().isDirectory() ? "[" + e + "]" : e).sorted(Comparator.naturalOrder()).collect(Collectors.toList());
+            log.info(files.toString());
             ctx.writeAndFlush(new FileList(files));
         }
     }
