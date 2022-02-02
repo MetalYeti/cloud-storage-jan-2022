@@ -23,7 +23,15 @@ public class FileProcessorHandler extends ChannelInboundHandlerAdapter {
     }
 
     public FileProcessorHandler(File currentDir) throws IOException {
-        this.currentDir = currentDir;
+        boolean root = false;
+        if (!currentDir.exists()) {
+            root = currentDir.mkdir();
+        }
+        if (root) {
+            this.currentDir = currentDir;
+        } else {
+            throw new RuntimeException("Cannot create root server directory " + currentDir);
+        }
     }
 
     @Override
