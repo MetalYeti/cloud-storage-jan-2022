@@ -27,7 +27,7 @@ public class FileProcessorHandler extends ChannelInboundHandlerAdapter {
         if (!currentDir.exists()) {
             root = currentDir.mkdir();
         }
-        if (root) {
+        if (root || currentDir.exists()) {
             this.currentDir = currentDir;
         } else {
             throw new RuntimeException("Cannot create root server directory " + currentDir);
@@ -151,7 +151,7 @@ public class FileProcessorHandler extends ChannelInboundHandlerAdapter {
     private void sendFilesList(ChannelHandlerContext ctx) {
         String[] currentDirFiles = currentDir.toPath().toFile().list();
         if (currentDirFiles != null) {
-            List<String> files = Arrays.stream(currentDirFiles).map(e -> Paths.get(e).toFile().isDirectory() ? "[" + e + "]" : e).sorted(Comparator.naturalOrder()).collect(Collectors.toList());
+            List<String> files = Arrays.stream(currentDirFiles).map(e -> currentDir.toPath().resolve(e).toFile().isDirectory() ? "[" + e + "]" : e).sorted(Comparator.naturalOrder()).collect(Collectors.toList());
             log.info(files.toString());
             ctx.writeAndFlush(new FileList(files));
         }
